@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Star Catcher</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #070c24;
+    color: #fff;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    overflow: hidden;
+  }
+  body { display: flex; align-items: center; justify-content: center; }
+
+  #wrap {
+    position: relative;
+    width: min(100vw, 75vh, 640px);
+    width: min(100vw, 75dvh, 640px);
+    aspect-ratio: 3 / 4;
+  }
+  canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+    border-radius: 12px;
+    touch-action: none;
+    cursor: none;
+  }
+
+  .overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5em;
+    padding: 4%;
+    text-align: center;
+    background: rgba(8, 13, 40, 0.88);
+    border-radius: 12px;
+    overflow-y: auto;
+    font-size: clamp(13px, 2.9vmin, 19px);
+  }
+  .hidden { display: none !important; }
+
+  h1 { margin: 0; font-size: 2.6em; color: #ffd23f; line-height: 1.1; }
+  h2 { margin: 0.4em 0 0; font-size: 1.3em; }
+  p { margin: 0; }
+  .sub { font-size: 1.15em; opacity: 0.85; }
+  .how { line-height: 1.5; opacity: 0.95; margin: 0.4em 0; }
+  .big { font-size: 4em; font-weight: 800; color: #ffd23f; line-height: 1; }
+
+  .btn {
+    font: inherit;
+    font-weight: 700;
+    font-size: 1.25em;
+    padding: 0.6em 1.8em;
+    border: 0;
+    border-radius: 999px;
+    background: #ffd23f;
+    color: #1a1f45;
+    cursor: pointer;
+    box-shadow: 0 4px 0 #c79a00;
+  }
+  .btn:hover { filter: brightness(1.08); }
+  .btn:active { transform: translateY(3px); box-shadow: 0 1px 0 #c79a00; }
+  .btn.small { font-size: 1em; padding: 0.45em 1.2em; }
+
+  .link {
+    font: inherit;
+    font-size: 0.8em;
+    background: none;
+    border: 0;
+    color: #fff;
+    opacity: 0.5;
+    text-decoration: underline;
+    cursor: pointer;
+  }
+
+  .board {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    width: min(100%, 18em);
+  }
+  .board li {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.25em 0.8em;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.08);
+    margin-bottom: 0.25em;
+  }
+  .board li.empty { opacity: 0.4; }
+
+  .entry { display: flex; flex-direction: column; align-items: center; gap: 0.5em; }
+  .entry input {
+    font: inherit;
+    font-size: 1.2em;
+    padding: 0.4em 0.7em;
+    border-radius: 10px;
+    border: 2px solid #ffd23f;
+    background: #0e1538;
+    color: #fff;
+    text-align: center;
+    width: 10em;
+  }
+</style>
+</head>
+<body>
+
+<div id="wrap">
+  <canvas id="game"></canvas>
+
+  <div id="menu" class="overlay">
+    <h1 id="title">Star Catcher</h1>
+    <p id="subtitle" class="sub"></p>
+    <p class="how">
+      Catch the ⭐ stars (and rare 🌟 gold ones).<br>
+      Dodge the 💣 bombs!<br>
+      You have <span id="secs">30</span> seconds.<br>
+      Move with your mouse, finger, or the ← → / A D keys.
+    </p>
+    <button id="playBtn" class="btn">Play</button>
+    <h2>Top 5</h2>
+    <ol id="boardMenu" class="board"></ol>
+    <button id="resetBtn" class="link">Reset scores</button>
+  </div>
+
+  <div id="over" class="overlay hidden">
+    <h2>Time's up!</h2>
+    <div class="big" id="finalScore">0</div>
+    <div id="entry" class="entry hidden">
+      <p>New high score! Enter your name:</p>
+      <input id="nameInput" maxlength="10" autocomplete="off" placeholder="Your name">
+      <button id="saveBtn" class="btn small">Save score</button>
+    </div>
+    <ol id="boardOver" class="board"></ol>
+    <button id="againBtn" class="btn">Play again</button>
+  </div>
+</div>
+
+<script>
+(() => {
+  // ====== EDIT THESE TO CUSTOMISE ======
+  const CONFIG = {
+    title: 'Star Catcher',
+    subtitle: 'Sixth Form Open Day',
+    roundSeconds: 30
+  };
+  // =====================================
+
+  const W = 480, H = 640, SCALE = 2;
+  const STORAGE_KEY = 'starcatcher-scores-v1';
+  const EMOJI = "'Segoe UI Emoji','Apple Color Emoji','Noto Color Emoji',sans-serif";
+
+  const $ = id => document.getElementById(id);
+  const canvas = $('game');
+  const ctx = canvas.getContext('2d');
+  canvas.width = W * SCALE;
+  canvas.height = H * SCALE;
+  ctx.setTransform(SCALE, 0, 0, SCALE, 0, 0);
+
+  document.title = CONFIG.title;
+  $('title').textContent = CONFIG.title;
+  $('subtitle').textContent = CONFIG.subtitle;
+  $('secs').textContent = CONFIG.roundSeconds;
+
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+  // ---------- State ----------
+  let state = 'menu';            // 'menu' | 'playing' | 'over'
+  let score = 0, timeLeft = CONFIG.roundSeconds, elapsed = 0;
+  let spawnTimer = 0, shake = 0, last = 0;
+  let items = [], pops = [];
+  const player = { x: W / 2, targetX: W / 2, y: H - 70, w: 90, h: 44 };
+  const keys = {};
+
+  // Twinkling background stars
+  const bg = Array.from({ length: 60 }, () => ({
+    x: Math.random() * W, y: Math.random() * H,
+    r: Math.random() * 2 + 1, sp: Math.random() * 2 + 1, ph: Math.random() * 6.28
+  }));
+
+  // ---------- Leaderboard (saved in this browser only) ----------
+  function loadScores() {
+    try {
+      const s = JSON.parse(localStorage.getItem(STORAGE_KEY));
+      return Array.isArray(s) ? s : [];
+    } catch (e) { return []; }
+  }
+  function saveScores(s) {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); } catch (e) {}
+  }
+  function qualifies(sc) {
+    const s = loadScores();
+    return sc > 0 && (s.length < 5 || sc > s[s.length - 1].score);
+  }
+  function renderBoard(el) {
+    const s = loadScores();
+    el.innerHTML = '';
+    for (let i = 0; i < 5; i++) {
+      const li = document.createElement('li');
+      const a = document.createElement('span');
+      const b = document.createElement('span');
+      if (s[i]) {
+        a.textContent = (i + 1) + '. ' + s[i].name;
+        b.textContent = s[i].score;
+      } else {
+        li.className = 'empty';
+        a.textContent = (i + 1) + '. ---';
+        b.textContent = '';
+      }
+      li.appendChild(a); li.appendChild(b);
+      el.appendChild(li);
+    }
+  }
+
+  // ---------- Input ----------
+  window.addEventListener('keydown', e => {
+    const k = e.key.toLowerCase();
+    keys[k] = true;
+    if (state === 'playing' && (k === 'arrowleft' || k === 'arrowright' || k === ' ')) e.preventDefault();
+  });
+  window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+
+  function pointerToTarget(e) {
+    const r = canvas.getBoundingClientRect();
+    player.targetX = (e.clientX - r.left) / r.width * W;
+  }
+  canvas.addEventListener('pointermove', pointerToTarget);
+  canvas.addEventListener('pointerdown', pointerToTarget);
+
+  // ---------- Game flow ----------
+  function start() {
+    if (state === 'playing') return;
+    state = 'playing';
+    score = 0; elapsed = 0; timeLeft = CONFIG.roundSeconds;
+    spawnTimer = 0.3; shake = 0; items = []; pops = [];
+    player.x = player.targetX = W / 2;
+    $('menu').classList.add('hidden');
+    $('over').classList.add('hidden');
+    last = performance.now();
+  }
+
+  function endGame() {
+    state = 'over';
+    $('finalScore').textContent = score;
+    const can = qualifies(score);
+    $('entry').classList.toggle('hidden', !can);
+    $('nameInput').value = '';
+    renderBoard($('boardOver'));
+    $('over').classList.remove('hidden');
+    (can ? $('nameInput') : $('againBtn')).focus();
+  }
+
+  function saveName() {
+    const name = ($('nameInput').value.trim() || 'Anon').slice(0, 10);
+    const s = loadScores();
+    s.push({ name, score });
+    s.sort((a, b) => b.score - a.score);
+    saveScores(s.slice(0, 5));
+    $('entry').classList.add('hidden');
+    renderBoard($('boardOver'));
+    $('againBtn').focus();
+  }
+
+  $('playBtn').addEventListener('click', start);
+  $('againBtn').addEventListener('click', start);
+  $('saveBtn').addEventListener('click', saveName);
+  $('nameInput').addEventListener('keydown', e => { if (e.key === 'Enter') saveName(); });
+  $('resetBtn').addEventListener('click', () => {
+    if (confirm('Clear all saved high scores on this device?')) {
+      saveScores([]);
+      renderBoard($('boardMenu'));
+    }
+  });
+
+  // ---------- Spawning ----------
+  function spawn() {
+    const r = Math.random();
+    let type, emoji, size;
+    if (r < 0.10)      { type = 'gold'; emoji = '🌟'; size = 17; }
+    else if (r < 0.30) { type = 'bomb'; emoji = '💣'; size = 18; }
+    else               { type = 'star'; emoji = '⭐'; size = 16; }
+    items.push({
+      type, emoji, r: size,
+      x: size + Math.random() * (W - size * 2),
+      y: -size,
+      vy: 150 + elapsed * 5 + Math.random() * 70
+    });
+  }
+
+  function pop(x, y, text, color) {
+    pops.push({ x, y, text, color, life: 0.8 });
+  }
+
+  // ---------- Update ----------
+  function update(dt) {
+    elapsed += dt;
+    timeLeft -= dt;
+    if (shake > 0) shake = Math.max(0, shake - dt);
+
+    const dir = (keys['arrowright'] || keys['d'] ? 1 : 0) - (keys['arrowleft'] || keys['a'] ? 1 : 0);
+    if (dir) player.targetX += dir * 520 * dt;
+    player.targetX = clamp(player.targetX, player.w / 2, W - player.w / 2);
+    player.x += (player.targetX - player.x) * Math.min(1, dt * 18);
+
+    spawnTimer -= dt;
+    if (spawnTimer <= 0) {
+      spawn();
+      spawnTimer = Math.max(0.28, 0.75 - elapsed * 0.015);
+    }
+
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      it.y += it.vy * dt;
+
+      const hitY = it.y + it.r * 0.6 >= player.y && it.y - it.r < player.y + player.h;
+      const hitX = Math.abs(it.x - player.x) < player.w / 2 + it.r * 0.5;
+      if (hitX && hitY) {
+        if (it.type === 'bomb') {
+          score = Math.max(0, score - 20);
+          shake = 0.3;
+          pop(it.x, player.y - 10, '-20', '#ff5c5c');
+        } else if (it.type === 'gold') {
+          score += 30;
+          pop(it.x, player.y - 10, '+30', '#ffd23f');
+        } else {
+          score += 10;
+          pop(it.x, player.y - 10, '+10', '#ffffff');
+        }
+        items.splice(i, 1);
+      } else if (it.y > H + 40) {
+        items.splice(i, 1);
+      }
+    }
+
+    for (let i = pops.length - 1; i >= 0; i--) {
+      pops[i].life -= dt;
+      pops[i].y -= 40 * dt;
+      if (pops[i].life <= 0) pops.splice(i, 1);
+    }
+
+    if (timeLeft <= 0) { timeLeft = 0; endGame(); }
+  }
+
+  // ---------- Draw ----------
+  function draw(t) {
+    ctx.save();
+    if (shake > 0) ctx.translate((Math.random() - 0.5) * shake * 30, (Math.random() - 0.5) * shake * 30);
+
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, '#0b1230');
+    g.addColorStop(1, '#25306b');
+    ctx.fillStyle = g;
+    ctx.fillRect(-20, -20, W + 40, H + 40);
+
+    ctx.fillStyle = '#fff';
+    for (const s of bg) {
+      ctx.globalAlpha = 0.4 + 0.4 * Math.sin(t * s.sp + s.ph);
+      ctx.fillRect(s.x, s.y, s.r, s.r);
+    }
+    ctx.globalAlpha = 1;
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const it of items) {
+      ctx.font = `${it.r * 2}px ${EMOJI}`;
+      ctx.fillText(it.emoji, it.x, it.y);
+    }
+
+    // Basket
+    const bx = player.x - player.w / 2, by = player.y;
+    ctx.fillStyle = '#ffb347';
+    ctx.beginPath();
+    ctx.moveTo(bx, by);
+    ctx.lineTo(bx + player.w, by);
+    ctx.lineTo(bx + player.w - 10, by + player.h);
+    ctx.lineTo(bx + 10, by + player.h);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#e8892b';
+    ctx.fillRect(bx - 4, by - 6, player.w + 8, 10);
+
+    // Score pop-ups
+    ctx.font = `bold 22px system-ui, sans-serif`;
+    for (const p of pops) {
+      ctx.globalAlpha = clamp(p.life / 0.8, 0, 1);
+      ctx.fillStyle = p.color;
+      ctx.fillText(p.text, p.x, p.y);
+    }
+    ctx.globalAlpha = 1;
+
+    // HUD
+    if (state === 'playing') {
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 26px system-ui, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText('Score: ' + score, 16, 28);
+      ctx.textAlign = 'right';
+      ctx.fillText(Math.ceil(timeLeft) + 's', W - 16, 28);
+
+      const frac = timeLeft / CONFIG.roundSeconds;
+      ctx.fillStyle = 'rgba(255,255,255,0.15)';
+      ctx.fillRect(0, 46, W, 8);
+      ctx.fillStyle = timeLeft <= 5 ? '#ff5c5c' : '#ffd23f';
+      ctx.fillRect(0, 46, W * frac, 8);
+    }
+
+    ctx.restore();
+  }
+
+  // ---------- Main loop ----------
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000 || 0);
+    last = now;
+    if (state === 'playing') update(dt);
+    draw(now / 1000);
+    requestAnimationFrame(frame);
+  }
+
+  renderBoard($('boardMenu'));
+  $('playBtn').focus();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
